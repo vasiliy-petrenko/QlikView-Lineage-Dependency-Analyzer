@@ -1,5 +1,7 @@
 A free <b>QlikView App</b> that allows you to <b>visualize</b> your QlikView solution as <b>a system of related elements</b>.
 
+[[https://github.com/vasiliy-petrenko/QlikView-Lineage-Dependency-Analyzer/blob/master/img/octocat.png|alt=octocat]]
+
 The application scans your QV environment and automatically discovers dependencies between QVW Apps, QVD Tables, Flat files etc.
 Then it shows you what the properties of the system are: it's goals (i.e. final user analytical apps), inputs and outputs of the elements, the complexity of direct and indirect relations. All in form of a single image - graph. And in lists of course.
  
