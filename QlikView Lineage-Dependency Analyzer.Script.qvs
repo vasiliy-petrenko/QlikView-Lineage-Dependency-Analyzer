@@ -1,0 +1,1246 @@
+﻿///$tab Main
+SET ThousandSep=' ';
+SET DecimalSep=',';
+SET MoneyThousandSep=' ';
+SET MoneyDecimalSep=',';
+SET MoneyFormat='# ##0,00р.;-# ##0,00р.';
+SET TimeFormat='h:mm:ss';
+SET DateFormat='DD.MM.YYYY';
+SET TimestampFormat='DD.MM.YYYY h:mm:ss[.fff]';
+SET MonthNames='янв;фев;мар;апр;май;июн;июл;авг;сен;окт;ноя;дек';
+SET DayNames='Пн;Вт;Ср;Чт;Пт;Сб;Вс';
+
+/* Setting initial values for error variables. ErrorMode 0 is needed for keeping script running if no metadata is present */
+SET ErrorMode 				= 0 ;
+LET vScriptErrorList_Files 	= '';
+
+/* StopList variable handling and necessary modification */
+LET vStopListForEntities = Replace( If( Match( vInput_StopListForEntities, ''), Repeat( Chr(39), 2 ), vInput_StopListForEntities ), Chr(10), '' ) ;
+
+///$tab Load - QVW Applications | Sources
+//=====================================[  Load metadata for each QVW in a list of folders  ]======================================
+TRACE Script block: Load QVW Applications | Sources;
+
+/* Variables-functions for extracting file attributes from string parameter */
+	/* extraction of attributes from STORE Lineage discriminator given by parameter $1 */
+SET eExtractFilePathFromLineageStore 	= Trim(PurgeChar(Replace(Replace(Replace(Replace(Replace(Replace(Replace($1, '  ', ' '), chr(10), ''), chr(9), ''), '(qvd)', ''), 'STORE - ', ''), chr(39), ''), chr(34), ''), '[]')) ;
+SET eExtractFileNameFromLineageStore 	= Lower( SubField($(eExtractFilePathFromLineageStore), '\', SubStringCount($(eExtractFilePathFromLineageStore), '\')+1) ) ;
+SET eExtractFileDirFromLineageStore		= Lower( Replace($(eExtractFilePathFromLineageStore), '\' & SubField($(eExtractFilePathFromLineageStore), '\', SubStringCount($(eExtractFilePathFromLineageStore), '\')+1), '') ) ;
+SET eExtractFileExtFromLineageStore		= SubField($(eExtractFilePathFromLineageStore), '.', SubStringCount($(eExtractFilePathFromLineageStore), '.')+1) ;
+	/* extraction of directory tree hierarchy for file within discriminator with depth given by num parameter $2 */
+SET eExtractFileDirTreeFromLineageStore	= Lower( TextBetween($(eExtractFilePathFromLineageStore), '\', '\' & SubField($(eExtractFilePathFromLineageStore), '\', SubStringCount($(eExtractFilePathFromLineageStore), '\')+1), RangeMax( SubStringCount($(eExtractFilePathFromLineageStore), '\') - $2, 1 ) ) ) ;
+	/* extraction of attributes from file specified by UNC-path given by string parameter $1 */
+SET eExtractFileNameFromFilePath		= Lower( SubField($1, '\', SubStringCount($1, '\')+1) ) ;
+SET eExtractFileDirFromFilePath			= Lower( Replace($1, '\' & SubField($1, '\', SubStringCount($1, '\')+1), '') ) ;
+SET eExtractFileExtFromFilePath			= SubField($1, '.', SubStringCount($1, '.')+1) ;
+SET eExtractFileDirTreeFromFilePath		= Lower( TextBetween($1, '\', '\' & SubField($1, '\', SubStringCount($1, '\')+1), RangeMax( SubStringCount($1, '\') - $2, 1 ) ) ) ;
+
+/* Setting possible period masks witnin file names. First suitable mask is used so the order in which they are mentioned matters */
+//SET vPeriodMasksInDateChars						= '*_YYYY_MM.qvd','*_MM_YYYY.qvd','*_YYYY-MM-DD.qvd','*_YYYYMMDD.qvd';
+LET vPeriodMasksInDateChars						= Chr(39) & vInput_PeriodMaskInDateChars01 & Chr(39) & ',' & Chr(39) & vInput_PeriodMaskInDateChars02 & Chr(39) & ',' & Chr(39) & vInput_PeriodMaskInDateChars03 & Chr(39) & ',' & Chr(39) & vInput_PeriodMaskInDateChars04 & Chr(39) & ',' & Chr(39) & vInput_PeriodMaskInDateChars05 & Chr(39) ;
+
+	/* replacement of Y/M/D symbols to wildcard=? */
+LET vPeriodMasksInWildCards						= Replace(Replace(Replace(vPeriodMasksInDateChars, 'D', '?'), 'M', '?'), 'Y', '?') ;
+LET vPeriodMasksInDateChars_string				= Replace(Replace(vPeriodMasksInDateChars, Chr(39), ''), ',', '|')  ;
+LET vPeriodMasksInWildCards_string				= Replace(Replace(vPeriodMasksInWildCards, Chr(39), ''), ',', '|')  ;
+
+/* Variables-functions for finding suitable mask for file name given by string parameter $1 */
+SET eMatchingPeriodMaskNo						= WildMatch($1, $(vPeriodMasksInWildCards) ) ;
+SET eMatchingPeriodMaskNameInDateChars			= SubField( '$(vPeriodMasksInDateChars_string)', '|', $(eMatchingPeriodMaskNo) ) ;
+SET eMatchingPeriodMaskNameInWildCards			= SubField( '$(vPeriodMasksInWildCards_string)', '|', $(eMatchingPeriodMaskNo) ) ;
+
+/* Variables-functions for replacing period suffix to suitable mask in file name */
+	/* extraction of suffix according to mask */
+SET eExtractSuffixSimilarToPeriodMask			= If( $(eMatchingPeriodMaskNo), '*' & Right($1, Len( $(eMatchingPeriodMaskNameInWildCards) ) - 1 ) ) ;
+	/* extracting Y, M, D symbols from suffix according to mask */
+SET eExtractDateCharsFromSuffix					= Mid($(eExtractSuffixSimilarToPeriodMask), Index( $(eMatchingPeriodMaskNameInDateChars), 'Y'), SubStringCount($(eMatchingPeriodMaskNameInDateChars), 'Y')) & Mid($(eExtractSuffixSimilarToPeriodMask), Index($(eMatchingPeriodMaskNameInDateChars), 'M'), SubStringCount($(eMatchingPeriodMaskNameInDateChars), 'M')) & Mid($(eExtractSuffixSimilarToPeriodMask), Index($(eMatchingPeriodMaskNameInDateChars), 'D'), SubStringCount($(eMatchingPeriodMaskNameInDateChars), 'D')) ;
+	/* validation of Y, M, D symbols against date formats */
+SET eDateCharsFromSuffixIsDate					= IsNum(Date#($(eExtractDateCharsFromSuffix), Repeat('Y', SubStringCount($(eMatchingPeriodMaskNameInDateChars), 'Y')) & Repeat('M', SubStringCount($(eMatchingPeriodMaskNameInDateChars), 'M')) & Repeat('D', SubStringCount($(eMatchingPeriodMaskNameInDateChars), 'D')))) ;
+	/* replacing suffix on mask */
+SET eReplaceSuffixToMask						= If( $(eDateCharsFromSuffixIsDate), Replace($1, Replace($(eExtractSuffixSimilarToPeriodMask), '*', ''), Replace(Replace($(eMatchingPeriodMaskNameInDateChars), '*', ''), Chr(39), '') ), $1 ) ;
+
+
+/* Looping through a list of Project Folders. A list of them is determined by user input variable */
+LET vProjectFolders								= Chr(39) & '01|' & vInput_ProjectFolder01 & Chr(39) & ',' & Chr(39) & '02|' & vInput_ProjectFolder02 & Chr(39) & ',' & Chr(39) & '03|' & vInput_ProjectFolder03 & Chr(39) & ',' & Chr(39) & '04|' & vInput_ProjectFolder04 & Chr(39) & ',' & Chr(39) & '05|' & vInput_ProjectFolder05 & Chr(39) ;
+
+FOR Each vFileUpperDir in $(vProjectFolders)	
+	TRACE Iteration: $(vFileUpperDir) out of $(vProjectFolders);
+		
+	/* iteration number */
+	LET vFileDirNo										= SubField( vFileUpperDir, '|', 1 );	
+	/* resetting iteration variable */
+	LET vFileUpperDir									= SubField( vFileUpperDir, '|', 2 );	
+	/* setting flag to scan subfolders */
+	LET vFileUpperDir_ScanSubFolders					= $(vInput_ProjectFolder$(vFileDirNo)_ScanSubFolders);
+	/* variables to keep current Folder depending on flag */
+	LET vFileUpperDir_ScanSubFoldersIsOff_string 		= If( not vFileUpperDir_ScanSubFolders, vFileUpperDir, 'null' );
+	LET vFileUpperDir_ScanSubFoldersIsOn_string		 	= If( vFileUpperDir_ScanSubFolders, vFileUpperDir, 'null' );
+	
+	/* For each File Folder from the comma-separated list containing either current Project Folder or it's subfolders... */
+	FOR Each vFileDir in '$(vFileUpperDir_ScanSubFoldersIsOff_string)',DirList('$(vFileUpperDir_ScanSubFoldersIsOn_string)' & '\*')
+		TRACE Iteration: $(vFileDir) out of $(vFileUpperDir_ScanSubFoldersIsOff_string), DirList($(vFileUpperDir_ScanSubFoldersIsOn_string));
+		
+		/* For each QVW file... */
+		FOR Each vFileName in FileList('$(vFileDir)\*.qvw')
+			TRACE Iteration: $(vFileName) out of FileList($(vFileDir));
+			
+			/* resetting iteration variable - extraction of file name from file path */
+			LET vFileName	= $(eExtractFileNameFromFilePath('$(vFileName)'));
+			
+			/* Adding a row for this QVW into [QVW Apps] */
+			[QVW_Applications]:	
+			LOAD
+			
+				If( 
+					$(vInput_UseFoldersInEntityNames), 
+					$(eExtractFileDirTreeFromFilePath('$(vFileDir)\$(vFileName)',$(vInput_FoldersDepthInEntityNames))) & '\', 
+					'' 
+				) 
+					& '$(vFileName)' 																							as [QVW Application],
+					
+				/* replacing a local folder inside file path on [RootFolder] and UNC path on Local path */
+				Replace( 
+					Replace( 
+						Lower( '$(vFileDir)' ), 
+						Lower('$(vInput_ProjectFoldersNetworkPath)'), 
+						Lower('$(vInput_ProjectFoldersLocalPath)') 
+					),																												
+					Lower('$(vInput_RootFolder_Local)'), 
+					'[rootfolder]' 
+				)																												as [QVW Application File Dir] 
+					
+			AutoGenerate (1)
+			;			
+			
+			/* Adding rows of Lineage metadata for this QVW into [Sources] */
+			[Sources]:
+			LOAD
+				/* source direction */
+				If(
+					WildMatch( Discriminator, 'STORE*' ),
+					'Outbound',
+					'Inbound'
+				)	 																						as [Source Direction],
+				
+				/* source type */
+				If(
+					WildMatch(
+						If(
+							WildMatch( Discriminator, 'STORE*' ),
+							$(eExtractFileExtFromLineageStore(Discriminator)),
+							$(eExtractFileExtFromFilePath(Discriminator))
+						)
+						, 'qvd' 
+					), 
+					'Qvd File',
+					If(
+						WildMatch( [Statement], '*Binary*'),
+						'Qvw File',
+						If(
+							WildMatch( Discriminator, 'Provider=*'),
+							'Database',
+							'Table File'
+						)
+					)
+					
+				)																							as [Source Type],
+				
+				/* this QVW file name (with directory tree hierarchy if necessary) */
+				If( 
+					$(vInput_UseFoldersInEntityNames), 
+					$(eExtractFileDirTreeFromFilePath('$(vFileDir)\$(vFileName)',$(vInput_FoldersDepthInEntityNames))) & '\', 
+					'' 
+				) 				
+					& '$(vFileName)'																		as [QVW Application],
+					
+				/* if the file path contains vInput_RootFolder_ProdEnv or UNC - replacing it with [RootFolder] and Local path correspondingly */
+				Replace(
+					Replace( 
+						If(
+							WildMatch( Discriminator, 'STORE*'),
+							$(eExtractFileDirFromLineageStore(Discriminator)),
+							$(eExtractFileDirFromFilePath(Discriminator))
+						),
+						Lower('$(vInput_ProjectFoldersNetworkPath)'), 
+						Lower('$(vInput_ProjectFoldersLocalPath)') 
+					),																												
+					Lower('$(vInput_RootFolder_ProdEnv)'), 
+					'[rootfolder]'				
+				)																							as [Source File Dir],		
+					
+				/* including absolute path part into Source name if necessary */
+				If( 
+					$(vInput_UseFoldersInEntityNames), 
+					If(
+						WildMatch( Discriminator, 'STORE*'),
+						$(eExtractFileDirTreeFromLineageStore(Discriminator,$(vInput_FoldersDepthInEntityNames))),
+						$(eExtractFileDirTreeFromFilePath(Discriminator,$(vInput_FoldersDepthInEntityNames)))
+					)
+					& 
+					'\', 
+					'' 
+				) 
+					& 
+					If(
+						WildMatch( Discriminator, 'STORE*'),
+						$(eExtractFileNameFromLineageStore(Discriminator)),
+						$(eExtractFileNameFromFilePath(Discriminator))
+					)
+					&
+					/* adding BINARY suffix in case of BINARY LOAD statement */
+					If(
+						WildMatch( [Statement], '*Binary*'),
+						' BINARY'
+					)																				
+																											as [Source]
+			
+			From 
+				[$(vFileDir)\$(vFileName)] 
+				(XmlSimple, Table is [DocumentSummary/LineageInfo])
+			Where
+				not WildMatch( Discriminator, 'INLINE*', 'RESIDENT*', 'AUTOGENERATE*')
+			;	
+			
+			/* If any error occurs while reading QVW (no XML, Section Access etc) - log the file name into Error List variable */
+			IF ScriptError=0 then
+				TRACE Message: No Error;
+			ELSE
+				TRACE Message: Is Error;
+				LET vScriptErrorList_Files = vScriptErrorList_Files & If(Len(vScriptErrorList_Files) > 0, ',') & Chr(39) & vFileDir & '\' & vFileName & Chr(39);
+			ENDIF
+	
+		NEXT
+
+	NEXT
+
+NEXT
+
+/* Several manipulations with Source attributes - Date masks handling and forming Unified name */
+[tmp_table01]:
+NoConcatenate
+LOAD
+	*,
+	$(eReplaceSuffixToMask(Source))					as [tmp_Source],
+	Replace( 
+		$(eReplaceSuffixToMask(Source)), 
+		Replace($(eMatchingPeriodMaskNameInDateChars(Source)), '*', ''),
+		Replace($(eMatchingPeriodMaskNameInWildCards(Source)), '*', '')
+	)												as [Source Unified Name]
+Resident
+	[Sources]
+;
+
+DROP Table
+	[Sources]
+;
+
+RENAME Table
+	[tmp_table01] to [Sources]
+;
+
+RENAME Fields
+	[Source] 		to [Source Full Name],
+	[tmp_Source] 	to [Source]
+;
+
+/* Applying Stop List filter to QVWs list */
+[tmp_table02]:
+NoConcatenate
+LOAD
+	*
+Resident
+	[QVW_Applications]
+Where
+	not 
+	WildMatch( 
+		[QVW Application]
+		, 
+		$(vStopListForEntities)
+	)
+;
+
+DROP Table
+	[QVW_Applications]
+;
+
+RENAME Table
+	[tmp_table02] to [QVW_Applications]
+;
+
+/* Applying Stop List filter to Sources list */
+[tmp_table03]:
+NoConcatenate
+LOAD
+	*
+Resident
+	[Sources]
+Where
+	not 
+	WildMatch( 
+		[QVW Application]
+		, 
+		$(vStopListForEntities)
+	)
+	and
+	not 
+	WildMatch( 
+		[Source]
+		, 
+		$(vStopListForEntities)
+	)
+;
+
+DROP Table
+	[Sources]
+;
+
+RENAME Table
+	[tmp_table03] to [Sources]
+;
+
+
+LET eExtractFilePathFromLineageStore 				= Null();
+LET eExtractFileNameFromLineageStore 				= Null();
+LET eExtractFileDirFromLineageStore 				= Null();
+LET eExtractFileExtFromLineageStore 				= Null();
+LET eExtractFileDirTreeFromLineageStore 			= Null();
+LET eExtractFileNameFromFilePath 					= Null();
+LET eExtractFileDirFromFilePath 					= Null();
+LET eExtractFileExtFromFilePath 					= Null();
+LET eExtractFileDirTreeFromFilePath 				= Null();
+
+LET vPeriodMasksInDateChars							= Null();
+LET vPeriodMasksInWildCards 						= Null();
+LET vPeriodMasksInDateChars_string 					= Null();
+LET vPeriodMasksInWildCards_string 					= Null();
+
+LET eMatchingPeriodMaskNo 							= Null();
+LET eMatchingPeriodMaskNameInDateChars 				= Null();
+LET eMatchingPeriodMaskNameInWildCards 				= Null();
+LET eExtractSuffixSimilarToPeriodMask 				= Null();
+LET eExtractDateCharsFromSuffix 					= Null();
+LET eDateCharsFromSuffixIsDate 						= Null();
+LET eReplaceSuffixToMask 							= Null();
+
+LET vFileName										= Null();
+LET vFileDir										= Null();
+
+LET vProjectFolders									= Null();
+LET vFileUpperDir									= Null();
+LET vFileDirNo										= Null();
+LET vFileUpperDir_ScanSubFolders					= Null();
+LET vFileUpperDir_ScanSubFoldersIsOff_string		= Null();
+LET vFileUpperDir_ScanSubFoldersIsOn_string			= Null();
+
+///$tab Load - Tables | Fields
+//=====================================[  Load metadata for each table within a list of scanned QVWs and Sources  ]======================================
+TRACE Script block: Load Tables | Fields;
+
+
+/* Creating template tables */
+[Tables]:
+LOAD
+	*
+Inline
+	[
+	Table
+	]
+;
+[Fields]:
+LOAD
+	*
+Inline
+	[
+	Field
+	]
+;
+[Field Tags]:
+LOAD
+	*
+Inline
+	[
+	Field Tag
+	]
+;
+
+/* Creating a table with Entity attributes - either QVWs or Sources */
+[tmp_table01]	:
+NoConcatenate
+LOAD Distinct
+	[Source File Dir] 																as [Entity File Dir],
+	[Source] 																		as [Entity],
+	[Source Unified Name] 															as [Entity Unified Name],
+	[Source Type]																 	as [Entity Type],
+	
+	If( not Match( [Source], [Source Unified Name] ), 1, 0 )						as [_Source Name Is Unified]
+	
+Resident
+	[Sources]
+;
+Concatenate
+LOAD Distinct
+	[QVW Application File Dir] 														as [Entity File Dir],
+	[QVW Application]																as [Entity],
+	'Qvw File' 																		as [Entity Type]
+Resident
+	[QVW_Applications]
+;
+
+/* Looping through Entitites after determining a number of them */
+LET vRowNo = NoOfRows('tmp_table01') - 1;
+
+FOR vIx = 0 to vRowNo
+	TRACE Iteration: vIx=$(vIx) out of $(vRowNo);
+	
+	/* Entity name */
+	LET vEntity 					= Peek('Entity', vIx, 'tmp_table01');
+		TRACE vEntity=$(vEntity);
+	LET vEntity_Type 				= Peek('Entity Type', vIx, 'tmp_table01');
+	/* if the file path contains [RootFolder] then replacing it with vInput_RootFolder_Local */
+	LET vEntity_FileDir 			= Replace( Peek('Entity File Dir', vIx, 'tmp_table01'), '[rootfolder]', Lower('$(vInput_RootFolder_Local)') );
+		TRACE vEntity_FileDir=$(vEntity_FileDir);
+	/* file name is Unified flag */
+	LET vEntity_FileNameIsUnified	= Peek('_Source Name Is Unified', vIx, 'tmp_table01');
+		TRACE vEntity_FileNameIsUnified=$(vEntity_FileNameIsUnified);
+	/* Unified file name */
+	LET vEntity_UnifiedFileName		= Peek('Entity Unified Name', vIx, 'tmp_table01');
+		TRACE vEntity_UnifiedFileName=$(vEntity_UnifiedFileName);
+	
+	/* file path (is detected regardless of whether Unified or not) */
+	IF vEntity_FileNameIsUnified then
+		/* cleaning variable if no file with Unified name was found */
+		LET vEntity_FilePath			= '';	
+		/* Unified file names scanning */
+		FOR Each vEntity_FilePath in FileList( '$(vEntity_FileDir)\' & If( vInput_UseFoldersInEntityNames, SubField( vEntity_UnifiedFileName, '\', SubStringCount( vEntity_UnifiedFileName, '\')+1), vEntity_UnifiedFileName ) )
+			/* the only iteration is made */
+			EXIT For
+		NEXT
+		
+	ELSE
+		/* file path for non-Unified file name */
+		LET vEntity_FilePath = vEntity_FileDir & '\' & If( vInput_UseFoldersInEntityNames, SubField( vEntity, '\', SubStringCount( vEntity, '\')+1), vEntity ) ;
+	
+	ENDIF
+		TRACE vEntity_FilePath=$(vEntity_FilePath);
+	
+	/* Confirming if the Entity exists */
+	LET vEntity_ConfirmExistence 	= ( FileSize('$(vEntity_FilePath)') > 0 );
+		TRACE vEntity_ConfirmExistence=$(vEntity_ConfirmExistence);
+	
+	IF vEntity_ConfirmExistence then
+		
+		/* different approaches to extraction for different Entity types (i.e. QVWs or QVDs) */					
+		SWITCH vEntity_Type
+										
+			/* QVDs Entities */
+			CASE 'Qvd File'
+				
+				/* extracting metadata on QVD table */
+				Concatenate ([Tables])
+				LOAD 
+				    TableName							as [Table],
+					Comment								as [Table Comment],
+
+					'$(vEntity)' 						as [Entity],
+					'$(vEntity)' & '|' & TableName 		as [Entity|Table]						
+				From 
+					[$(vEntity_FilePath)] 
+					(XmlSimple, Table is [QvdTableHeader])
+				;
+				
+				
+				/* determining QVD table name */
+				LET vTable			= Peek('Table', NoOfRows('Tables') - 1, 'Tables');
+						
+				/* adding Field metadata data rows to [Fields] */
+				Concatenate ([Fields])
+				LOAD 
+					FieldName												as [Field],
+					Comment													as [Field Comment],
+			    
+					'$(vEntity)' & '|' & '$(vTable)' 						as [Entity|Table],
+					'$(vEntity)' & '|' & '$(vTable)' & '|' & [FieldName] 	as [Entity|Table|Field]
+				From 
+					[$(vEntity_FilePath)] 
+					(XmlSimple, Table is [QvdTableHeader/Fields/QvdFieldHeader])
+				;
+				
+				/* adding field tags metadata rows to [Field Tags] */
+				[tmp_table04]:
+				NoConcatenate
+				LOAD 
+					'$(vEntity)' & '|' & '$(vTable)' & '|' & [FieldName] 	as [Entity|Table|Field],
+				    %Key_QvdFieldHeader_59D66ED49CFF179D    // Key for this table: QvdTableHeader/Fields/QvdFieldHeader
+				From 
+					[$(vEntity_FilePath)] 
+					(XmlSimple, Table is [QvdTableHeader/Fields/QvdFieldHeader])
+				;
+				Left Join
+				LOAD 
+				    %Key_QvdFieldHeader_59D66ED49CFF179D,    // Key to parent table: QvdTableHeader/Fields/QvdFieldHeader
+					String%Table											as [Field Tag]
+				From 
+					[$(vEntity_FilePath)] 
+					(XmlSimple, Table is [QvdTableHeader/Fields/QvdFieldHeader/Tags/String])
+				;
+				
+				Concatenate ([Field Tags])
+				LOAD
+					[Entity|Table|Field],
+					[Field Tag]
+				Resident
+					[tmp_table04]
+				;
+				
+				DROP Table
+					[tmp_table04]
+				;
+	
+			
+			/* QVWs Entities */
+			CASE 'Qvw File'
+								
+				/* extracting metadata on QVW tables */
+				Concatenate ([Tables])
+				LOAD 
+				    Name 						as [Table],
+    				Comment						as [Table Comment],
+
+					'$(vEntity)' 				as [Entity],
+					'$(vEntity)' & '|' & Name 	as [Entity|Table]
+
+				From 
+					[$(vEntity_FilePath)]
+					(XmlSimple, Table is [DocumentSummary/TableDescription])
+				Where
+					Match(IsSystem, 'false')
+				;	
+				
+				/* adding field metadata rows to [Fields] */
+				[tmp_table03]:
+				NoConcatenate
+				LOAD 
+				    Name									as [Field],
+    				Comment									as [Field Comment],
+				    %Key_FieldDescription_8942ED1DAD568474    // Key for this table: DocumentSummary/FieldDescription
+				From 
+					[$(vEntity_FilePath)] 
+					(XmlSimple, Table is [DocumentSummary/FieldDescription])
+				Where
+					Match(IsSystem, 'false')
+				;	
+				Left Join
+				LOAD 
+				    %Key_FieldDescription_8942ED1DAD568474,    // Key to parent table: DocumentSummary/FieldDescription
+					String%Table							as [Table]
+				From 
+					[$(vEntity_FilePath)] 
+					(XmlSimple, Table is [DocumentSummary/FieldDescription/SrcTables/String])
+				;		
+				
+				Concatenate ([Fields])	
+				LOAD
+					[Field],
+					[Field Comment],
+					'$(vEntity)' & '|' & [Table] 						as [Entity|Table],
+					'$(vEntity)' & '|' & [Table] & '|' & [Field]		as [Entity|Table|Field]
+				Resident
+					[tmp_table03]
+				;
+				
+				DROP Table
+					[tmp_table03]
+				;
+				
+				/* adding field tas metadata rows to [Field Tags] */
+				[tmp_table05]:
+				NoConcatenate
+				LOAD 
+				    Name									as [Field],
+				    %Key_FieldDescription_8942ED1DAD568474    // Key for this table: DocumentSummary/FieldDescription
+				From 
+					[$(vEntity_FilePath)] 
+					(XmlSimple, Table is [DocumentSummary/FieldDescription])
+				Where
+					Match(IsSystem, 'false')
+				;
+				Left Join
+				LOAD 
+				    %Key_FieldDescription_8942ED1DAD568474,    // Key to parent table: DocumentSummary/FieldDescription
+					String%Table							as [Table]
+				From 
+					[$(vEntity_FilePath)] 
+					(XmlSimple, Table is [DocumentSummary/FieldDescription/SrcTables/String])
+				;
+				Left Join
+				LOAD 
+				    %Key_FieldDescription_8942ED1DAD568474,    // Key to parent table: DocumentSummary/FieldDescription
+					String%Table							as [Field Tag]
+				From 
+					[$(vEntity_FilePath)] 
+					(XmlSimple, Table is [DocumentSummary/FieldDescription/Tags/String])
+				;
+							
+				Concatenate ([Field Tags])
+				LOAD
+					'$(vEntity)' & '|' & [Table] & '|' & [Field] as [Entity|Table|Field],
+					[Field Tag]
+				Resident
+					[tmp_table05]
+				;
+				
+				DROP Table
+					[tmp_table05]
+				;
+	
+
+			DEFAULT
+								
+		ENDSWITCH				
+	
+	ENDIF
+		
+NEXT
+
+
+DROP Table
+	[tmp_table01]
+;
+
+LET vRowNo						= Null();
+LET vIx 						= Null();
+LET vEntity						= Null();
+LET vEntity_Type				= Null();
+LET vEntity_Params				= Null();
+LET vEntity_FileDir				= Null();
+LET vEntity_FileNameIsUnified	= Null();
+LET vEntity_UnifiedFileName		= Null();
+LET vEntity_FilePath			= Null();
+LET vEntity_ConfirmExistence	= Null();
+LET vTable						= Null();
+LET vField						= Null();
+LET vNoOfFields					= Null();
+LET vJx							= Null();
+
+///$tab Transform - QVW Applications | Sources
+//=====================================[  Extending Sources table in cases of Lineage metadata absence (no STORE statement in QVW for example). Scan QVD themselves for this kind of data.  ]======================================
+TRACE Script block: Transform Sources;
+
+
+/* Variables-functions for extracting file attributes from string parameter */
+SET eExtractFileNameFromFilePath		= Lower( SubField($1, '\', SubStringCount($1, '\')+1) ) ;
+SET eExtractFileDirFromFilePath			= Lower( Replace($1, '\' & SubField($1, '\', SubStringCount($1, '\')+1), '') ) ;
+SET eExtractFileDirTreeFromFilePath		= Lower( TextBetween($1, '\', '\' & SubField($1, '\', SubStringCount($1, '\')+1), RangeMax( SubStringCount($1, '\') - $2, 1 ) ) ) ;
+
+
+/* Creating a list of QVDs for which Outbound record DOES exist */
+[tmp_table01]:
+NoConcatenate
+LOAD Distinct
+	[Source]	as [tmp_Source]
+Resident
+	[Sources]
+Where
+	Match( [Source Direction], 'Outbound' )
+	and Match( [Source Type], 'Qvd File' )
+;
+
+/* Creating a list of QVDs for which Outbound record DOES_NOT exist */
+[tmp_table02]:
+NoConcatenate
+LOAD Distinct
+	[Source],
+	[Source File Dir],
+	[Source Full Name],
+	[Source Unified Name]
+Resident
+	[Sources]
+Where
+	not Exists( [tmp_Source], [Source] )
+	and Match( [Source Type], 'Qvd File' )
+;
+
+
+/* Looping through each Source after determining a number of them  */
+LET vRowNo = NoOfRows('tmp_table02') - 1;
+
+FOR vIx = 0 to vRowNo
+	TRACE Iteration: vIx=$(vIx) out of $(vRowNo);
+	
+	
+	/* Source name */
+	LET vSource 					= Peek('Source', vIx, 'tmp_table02');
+//		TRACE vSource=$(vSource);
+	/* Source folder */
+	LET vSource_FileDir 			= Peek('Source File Dir', vIx, 'tmp_table02');
+		TRACE vSource_FileDir=$(vSource_FileDir);
+	/* full name */
+	LET vSource_FullName			= Peek('Source Full Name', vIx, 'tmp_table02');
+		TRACE vSource_FullName=$(vSource_FullName);
+	/* unified file name */
+	LET vSource_UnifiedName			= Peek('Source Unified Name', vIx, 'tmp_table02');
+//		TRACE vSource_UnifiedName=$(vSource_UnifiedName);
+	/* file path, if contains [RootFolder] then replacing it with vInput_RootFolder_Local */	
+	LET vSource_FilePath			= Replace( Peek('Source File Dir', vIx, 'tmp_table02'), '[rootfolder]', Lower('$(vInput_RootFolder_Local)') ) & '\' & If( vInput_UseFoldersInEntityNames, SubField( vSource_FullName, '\', SubStringCount( vSource_FullName, '\')+1), vSource_FullName ) ;
+//		TRACE vSource_FilePath=$(vSource_FilePath);
+	
+	
+	/* Confirming if the Source exists */
+	LET vSource_ConfirmExistence 	= ( FileSize('$(vSource_FilePath)') > 0 );
+		TRACE vSource_ConfirmExistence=$(vSource_ConfirmExistence);
+	
+	IF vSource_ConfirmExistence then
+	
+		/* extracting QVD metadata - QVW-generator */
+		[tmp_table03]:
+		NoConcatenate
+		LOAD 
+		    CreatorDoc
+		    
+		From 
+			[$(vSource_FilePath)] 
+			(XmlSimple, Table is [QvdTableHeader])
+		;
+		
+		/* QVW-generator attributes */
+		LET vSource_CreatorDoc 					= Peek('CreatorDoc', 0, 'tmp_table03');
+			TRACE vSource_CreatorDoc=$(vSource_CreatorDoc);
+		LET vSource_CreatorDocFileName 			= $(eExtractFileNameFromFilePath(vSource_CreatorDoc));
+			TRACE vSource_CreatorDocFileName=$(vSource_CreatorDocFileName);
+		LET vSource_CreatorDocFileDir 			= $(eExtractFileDirFromFilePath(vSource_CreatorDoc));
+			TRACE vSource_CreatorDocFileDir=$(vSource_CreatorDocFileDir);
+		LET vSource_CreatorDocFileDirTree		= $(eExtractFileDirTreeFromFilePath(vSource_CreatorDoc,vInput_FoldersDepthInEntityNames));
+			TRACE vSource_CreatorDocFileDirTree=$(vSource_CreatorDocFileDirTree);
+		
+		DROP Table
+			[tmp_table03]
+		;
+		
+		/* Adding a row with QVD-QVW pair for this QVD into [Sources] */
+		Concatenate ([Sources])
+		LOAD
+			'Outbound' 								as [Source Direction],
+			'Qvd File'								as [Source Type],
+			
+			If( 
+				$(vInput_UseFoldersInEntityNames), 
+				'$(vSource_CreatorDocFileDirTree)' & '\', 
+				'' 
+			) 				
+				& '$(vSource_CreatorDocFileName)' 	as [QVW Application],
+			
+			'$(vSource_FileDir)'					as [Source File Dir],
+			'$(vSource)'							as [Source],
+			'$(vSource_UnifiedName)' 				as [Source Unified Name],
+			'$(vSource_FullName)' 					as [Source Full Name]
+			
+		AutoGenerate (1)
+		;
+		
+		/*  Adding a row of QVW-generator for this QVD into [QVW_Applications] */
+		Concatenate ([QVW_Applications])
+		LOAD
+			If( 
+				$(vInput_UseFoldersInEntityNames), 
+				'$(vSource_CreatorDocFileDirTree)' & '\', 
+				'' 
+			) 				
+				& '$(vSource_CreatorDocFileName)' 																	as [QVW Application],
+				
+				/* if the file path contains vInput_RootFolder_ProdEnv or UNC - replacing it with [RootFolder] and Local path correspondingly */
+			Replace( 
+				Replace( 
+					'$(vSource_CreatorDocFileDir)', 
+					Lower('$(vInput_ProjectFoldersNetworkPath)'), 
+					Lower('$(vInput_ProjectFoldersLocalPath)') 
+				),																												
+				Lower('$(vInput_RootFolder_ProdEnv)'), 
+				'[rootfolder]' 
+			) 																										as [QVW Application File Dir]
+			
+		AutoGenerate (1)
+		;
+		
+	ENDIF
+	
+NEXT
+
+DROP Tables
+	[tmp_table01],
+	[tmp_table02]
+;
+
+
+/* Applying Stop List filter to QVWs list */
+[tmp_table03]:
+NoConcatenate
+LOAD
+	*
+Resident
+	[QVW_Applications]
+Where
+	not 
+	WildMatch( 
+		[QVW Application]
+		, 
+		$(vStopListForEntities)
+	)
+;
+
+DROP Table
+	[QVW_Applications]
+;
+
+RENAME Table
+	[tmp_table03] to [QVW_Applications]
+;
+
+/* Applying Stop List filter to Sources list */
+[tmp_table04]:
+NoConcatenate
+LOAD
+	*
+Resident
+	[Sources]
+Where
+	not 
+	WildMatch( 
+		[QVW Application]
+		, 
+		$(vStopListForEntities)
+	)
+	and
+	not 
+	WildMatch( 
+		[Source]
+		, 
+		$(vStopListForEntities)
+	)
+;
+
+DROP Table
+	[Sources]
+;
+
+RENAME Table
+	[tmp_table04] to [Sources]
+;
+
+
+LET eExtractFileNameFromFilePath 	= Null();
+LET eExtractFileDirFromFilePath 	= Null();
+LET eExtractFileDirTreeFromFilePath	= Null();
+
+LET vRowNo							= Null();
+LET vIx 							= Null();
+
+LET vSource 						= Null();
+LET vSource_FileDir 				= Null();
+LET vSource_FullName 				= Null();
+LET vSource_UnifiedName 			= Null();
+LET vSource_FilePath	 			= Null();
+LET vSource_ConfirmExistence		= Null();
+LET vSource_CreatorDoc 				= Null();
+LET vSource_CreatorDocFileName 		= Null();
+LET vSource_CreatorDocFileDir 		= Null();
+LET vSource_CreatorDocFileDirTree	= Null();
+
+///$tab Transform - Ancestor-Descendant
+//=====================================[  Creating a table with Realtions data  ]======================================
+TRACE Script block: Transform Ancestor-Descendant;
+
+
+//------------- Locating Entities of the first and the latest Points in time 
+
+/* Locating QVWs with Outbounds and Sources with Inbounds */
+[tmp_table01]:
+NoConcatenate
+LOAD Distinct
+	[QVW Application] as [tmpfld QVW Application]
+Resident
+	[Sources]
+Where
+	Match([Source Direction], 'Outbound')
+;
+Concatenate
+LOAD Distinct
+	[Source] as [tmpfld Source]
+Resident
+	[Sources]
+Where
+	Match([Source Direction], 'Inbound')
+;
+
+/* Locating the opposite: QVWs WITHOUT Outbounds and Sources WITHOUT Inbounds */
+[tmp_DescendantAncestorRelations]:
+NoConcatenate
+LOAD Distinct
+	[QVW Application] 	as [Entity],
+	'QVW Application' 	as [Type],
+	'' 					as [Descendant],
+	1 					as [HierLevel],
+	[QVW Application] & '|' & ''	as [Entity|Descendant]
+	
+Resident
+	[Sources]
+Where
+	not Exists([tmpfld QVW Application], [QVW Application])
+;
+Concatenate
+LOAD Distinct
+	[Source] 			as [Entity],
+	'Source' 			as [Type],
+	'' 					as [Descendant],
+	1 					as [HierLevel],
+	[Source] & '|' & ''	as [Entity|Descendant]
+	
+Resident
+	[Sources]
+Where
+	not Exists([tmpfld Source], [Source])
+;
+
+DROP Table 
+	[tmp_table01]
+;
+
+/* Stopping the script if the Relations table is not available */
+IF IsNull(TableNumber('tmp_DescendantAncestorRelations')) then
+	TRACE Sources table does not exist;
+	EXIT Script;
+ENDIF
+
+
+//--------------- Using an iteration construct, locating Entities of previous Point until the last Point is reached 
+
+/* Looping through all Points until they all are reached. Setting the number of the last Point to 1 (opposite numeration is used) */
+LET vHierLevelNum = 1;
+
+DO 
+	TRACE Iteration: vHierLevelNum=$(vHierLevelNum);
+
+	/* removing a table for filtration if it exists */
+	IF not IsNull(TableNumber('tmp_table02')) then
+		DROP Table [tmp_table02];
+	ENDIF
+
+	
+	/* creating a table for filtration on previous Point Entities */
+	[tmp_table02]:
+	LOAD
+		[Entity] 	as [tmpfld Entity]
+	Resident
+		[tmp_DescendantAncestorRelations]
+	Where
+		Match([HierLevel], $(vHierLevelNum))
+	;
+
+	/* increasing iteration Point */
+	LET vHierLevelNum = vHierLevelNum + 1;
+
+	
+	/* locating QVWs for previous Point Entity with type - Source */
+	Concatenate ([tmp_DescendantAncestorRelations])
+	LOAD
+		[QVW Application] 					as [Entity],
+		'QVW Application' 					as [Type],
+		[Source] 							as [Descendant],
+		$(vHierLevelNum) 					as [HierLevel],
+		[QVW Application] & '|' & [Source]	as [Entity|Descendant]
+		
+	Resident
+		[Sources]
+	Where
+		Exists([tmpfld Entity], [Source])
+		and Match([Source Direction], 'Outbound')
+		and not Exists([Entity|Descendant], [Source] & '|' & [QVW Application])
+	;			
+	/* locating Sources for previous Point Entity with type - QVW  */
+	Concatenate ([tmp_DescendantAncestorRelations])
+	LOAD
+		[Source] 							as [Entity],
+		'Source' 							as [Type],
+		[QVW Application] 					as [Descendant],
+		$(vHierLevelNum) 					as [HierLevel],
+		[Source] & '|' & [QVW Application]	as [Entity|Descendant]
+		
+	Resident
+		[Sources]
+	Where
+		Exists([tmpfld Entity], [QVW Application])
+		and Match([Source Direction], 'Inbound')
+		and not Exists([Entity|Descendant], [QVW Application] & '|' & [Source])
+	;
+
+	/* stopping iterations if no Entities are left or if hierarchy depth is more than 50 levels deep and so there is some kind of recursion */
+LOOP until NoOfRows('tmp_table02') = 0	or vHierLevelNum = 50
+
+
+/* Stopping the script in case of recursion */
+IF vHierLevelNum = 50 then
+	/* storing the table into debug snapshot */
+	STORE
+		[tmp_DescendantAncestorRelations]
+	into
+		[LDA_DebugInfo.qvd]
+		(qvd)
+	;
+	SET ErrorMode = 1 ;
+	CALL ThrowException('Unspecified Error. Please contact support (see e-mail in script) and attach following files to the message: 1) application log, 2) LDA_DebugInfo.qvd. They are located right beside the QVW.');
+ENDIF
+
+DROP Table 
+	[tmp_table02]
+;
+
+RENAME Table 
+	[tmp_DescendantAncestorRelations] to [Ancestor-Descendant]
+;
+
+LET vHierLevelNum = Null();
+
+///$tab Transform - DataFlows
+//=====================================[  Creating a table with DataFlows  ]======================================
+TRACE Script block: Transform DataFlows;
+
+
+/* Calculating the latest Point number */
+[tmp_table01]:
+NoConcatenate 
+LOAD
+	HierLevel
+Resident 
+	[Ancestor-Descendant]
+Order By
+	HierLevel desc
+;
+
+LET vLastHierLevel = Peek('HierLevel', 0, [tmp_table01]);
+
+DROP Table
+	[tmp_table01]
+;
+
+/* Transforming the initial table - rankings and Relation directions */
+[tmp_table02]:
+NoConcatenate 
+LOAD
+	Entity,
+	Descendant,
+	/* Relation direction (arrow ID) */
+	Entity & ' ---> ' & Descendant 				as [Dim2],
+	/* transforming to opposite ranking */
+	Num#( $(vLastHierLevel) - HierLevel + 1 ) 	as [Measure1]
+	
+Resident
+	[Ancestor-Descendant]
+Where
+	/* except for the latest Point */
+	not IsNull(Descendant)
+	and not Match(Descendant, '')
+;
+
+/* Duplication of table rows */
+[tmp_table03]:
+NoConcatenate 
+LOAD
+	Entity,
+	[Dim2],
+	/* ancestor, X = opposite ranking */
+	Num#( [Measure1] ) 		as [Measure1]
+Resident
+	[tmp_table02]
+;
+Concatenate 
+LOAD
+	Descendant 				as Entity,
+	[Dim2],
+	/* descendant, X = opposite ranking + 1 */
+	Num#( [Measure1] + 1) 	as [Measure1]
+Resident
+	[tmp_table02]
+;
+
+
+/* Creating a mapping for the lowest X */
+[mapping_EntityCoordinates_X]:
+Mapping 
+LOAD
+	Entity,
+	[Measure1]
+Resident 
+	[tmp_table03]
+Order By
+	[Measure1] asc
+;
+
+/* Transforming X to the lowest for each Entity with mapping */
+[tmp_table04]:
+NoConcatenate 
+LOAD
+	Entity,
+	[Dim2],
+	ApplyMap('mapping_EntityCoordinates_X', [Entity]) 	as [Measure1]
+Resident
+	[tmp_table03]
+;
+
+
+/* Transforming for determining Y (Measure2), only distinct rows */
+[ScatterChart_data]:
+NoConcatenate 
+LOAD Distinct
+	*,
+	/* Determining number within X (Measure1) and an Entity */
+		/* if Measure1 in current and previous rows are not equal ...*/	
+	Num#(
+		If( ( not ( Peek('Measure1', -1) = [Measure1] ) ),
+			/* then counter is set to 1 */
+			1,
+			/* otherwise if Entity in current and previous rows are not equal ...*/
+			If( ( not ( Peek('Entity', -1) = [Entity] ) ), 
+				/* then counter is set to 1  */
+				Peek('Measure2', -1) + 1,
+				/* otherwise counter is not changed */
+				Peek('Measure2', -1)
+			) 
+		)
+	) 													as [Measure2]										
+;
+LOAD
+	Entity,
+	/* Dim1 is equal to Measure1 */
+	[Measure1] 	as [Dim1],
+	[Dim2],
+	[Measure1]
+Resident 
+	[tmp_table04]
+Order By
+	[Measure1] desc,
+	Entity asc
+;
+
+
+DROP Tables 
+	[tmp_table02],
+	[tmp_table03],
+	[tmp_table04]
+;
+
+/* Renaming fields for better usability */
+RENAME Table 
+	[ScatterChart_data] to [DataFlows]
+;
+
+RENAME Fields
+	[Dim1] 		to [Data Flow Point],
+	[Dim2] 		to [Data Flow],
+	[Measure1] 	to [ScatterChart_X],
+	[Measure2] 	to [ScatterChart_Y]	
+;
+
+LET vLastHierLevel = Null();
+
+///$tab Transform - Entities
+//=====================================[  Creating an Entity table  ]======================================
+TRACE Script block: Transform Entities;
+
+
+[tmp_table01]:
+NoConcatenate
+LOAD
+	*,
+	text([QVW Application]) & '|' & text([Source]) 	as [QVW Application|Source]
+Resident
+	[Sources]
+;
+
+DROP Table
+	[Sources]
+;
+
+RENAME Table
+	[tmp_table01] to [Sources]
+;
+
+/* Combining QVWs abd Sources into single Entity table */
+[Entities]:
+LOAD Distinct
+	[QVW Application|Source],
+	SubField([QVW Application|Source], '|', 1) 	as [Entity],
+	'QVW Application'							as [Entity Type]
+Resident 
+	[Sources]
+;
+Concatenate
+LOAD Distinct
+	[QVW Application|Source],
+	SubField([QVW Application|Source], '|', 2) 	as [Entity],
+	'Source'									as [Entity Type]
+Resident 
+	[Sources]
+;
+
+///$tab Transform - Entity Relations
+//=====================================[  Creating a Relations table  ]======================================
+TRACE Script block: Transform Entity Relations;
+
+
+[tmp_table01]:
+HierarchyBelongsTo (Entity, Descendant, EntityName, 'AncestorID', 'AncestorName')
+LOAD Distinct 
+	 Entity, 
+//     Type, 
+     Descendant, 
+//     HierLevel
+	 Entity 		as EntityName
+Resident 
+	[Ancestor-Descendant]
+;
+
+/* Creating a table with descendants for each Entity */
+[Entity_Relations]:
+NoConcatenate
+LOAD Distinct
+	Entity 			as [Entity],
+	AncestorName 	as [Related Entity],
+	'Descendant'	as [Relation Type]
+Resident
+	[tmp_table01]
+;
+
+/* Creating a table with ancestors for each Entity (fields change it's places) */
+Concatenate
+LOAD Distinct
+	AncestorName 	as [Entity],
+	Entity 			as [Related Entity],
+	'Ancestor'		as [Relation Type]
+Resident
+	[tmp_table01]
+;
+
+/* Adding fields by join */
+Left Join
+LOAD Distinct
+	Entity 			as [Related Entity],
+	/* added fields */
+	Type 			as [Related Entity Type]
+Resident 
+	[Ancestor-Descendant]
+;
+DROP Tables
+	[tmp_table01]
+;
+
+///$tab CleanUp
+DROP Table 
+	[Ancestor-Descendant]
+;
+
+LET vStopListForEntities = Null();
+
+///$tab Script Errors list
+LET vScriptErrorCount		= ScriptErrorCount;
+LET vScriptErrorList		= ScriptErrorList;
+
+SET ErrorMode 				= 1 ;
