@@ -13,4 +13,4 @@ Now you have all the necessary information - a list of all sources and transform
 Simply said, data in a QlikView solution is organised into Data Models (QVW) plus Data Files (QVD/Flat files) and Tables plus Fields inside them.
 The application helps you find out similarities and differences and relations between those mentioned. For example: which fields are most commonly used and which - least? Which App has the widest Fact table? If you are to make changes to a field - what Apps need to be considered? And so on.
 
-<b>Furher reading: <a href="https://community.qlik.com/docs/DOC-16993">Qlik Community Item: Lineage / Dependency Analyzer for QlikView</a></b>
+<b>Further reading: <a href="https://community.qlik.com/docs/DOC-16993">Qlik Community Item: Lineage / Dependency Analyzer for QlikView</a></b>
