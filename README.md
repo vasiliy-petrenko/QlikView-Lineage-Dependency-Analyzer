@@ -1,3 +1,4 @@
+<h1>Lineage / Dependency Analyzer for QlikView</h1>
 A free <b>QlikView App</b> that allows you to <b>visualize</b> your QlikView solution as <b>a system of related elements</b>.
 
 <img src="https://github.com/vasiliy-petrenko/QlikView-Lineage-Dependency-Analyzer/blob/master/2016-07-04_205123.png">
