@@ -110,8 +110,20 @@ FOR Each vFileUpperDir in $(vProjectFolders)
 				)																												as [QVW Application File Dir] 
 					
 			AutoGenerate (1)
-			;			
+			;		
 			
+			/* Loading metadata into temporary table with cleansing */			
+			[tmp.Sources]:
+			LOAD
+				PurgeChar( Discriminator, ';' ) as Discriminator, 
+				Statement
+			From 
+				[$(vFileDir)\$(vFileName)] 
+				(XmlSimple, Table is [DocumentSummary/LineageInfo])
+			Where
+				not WildMatch( Discriminator, 'INLINE*', 'RESIDENT*', 'AUTOGENERATE*')
+			;
+						
 			/* Adding rows of Lineage metadata for this QVW into [Sources] */
 			[Sources]:
 			LOAD
@@ -194,12 +206,13 @@ FOR Each vFileUpperDir in $(vProjectFolders)
 					)																				
 																											as [Source]
 			
-			From 
-				[$(vFileDir)\$(vFileName)] 
-				(XmlSimple, Table is [DocumentSummary/LineageInfo])
-			Where
-				not WildMatch( Discriminator, 'INLINE*', 'RESIDENT*', 'AUTOGENERATE*')
+			Resident
+				[tmp.Sources]
 			;	
+
+			DROP Table
+				[tmp.Sources]
+			;
 			
 			/* If any error occurs while reading QVW (no XML, Section Access etc) - log the file name into Error List variable */
 			IF ScriptError=0 then
