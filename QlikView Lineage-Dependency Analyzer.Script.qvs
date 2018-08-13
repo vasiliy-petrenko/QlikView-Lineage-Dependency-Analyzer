@@ -115,7 +115,8 @@ FOR Each vFileUpperDir in $(vProjectFolders)
 			/* Loading metadata into temporary table with cleansing */			
 			[tmp.Sources]:
 			LOAD
-				PurgeChar( Discriminator, ';' ) as Discriminator, 
+				/* cleaning garbage from Discriminator string (different QlikView versions write different garbage) */
+				Replace( PurgeChar( Discriminator, ';' ), 'DSN=', '' ) as Discriminator, 
 				Statement
 			From 
 				[$(vFileDir)\$(vFileName)] 
