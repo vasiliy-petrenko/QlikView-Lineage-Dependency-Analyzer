@@ -16,7 +16,6 @@ LET vScriptErrorList_Files 	= '';
 
 /* StopList variable handling and necessary modification */
 LET vStopListForEntities = Replace( If( Match( vInput_StopListForEntities, ''), Repeat( Chr(39), 2 ), vInput_StopListForEntities ), Chr(10), '' ) ;
-
 ///$tab Load - QVW Applications | Sources
 //=====================================[  Load metadata for each QVW in a list of folders  ]======================================
 TRACE Script block: Load QVW Applications | Sources;
@@ -67,18 +66,21 @@ FOR Each vFileUpperDir in $(vProjectFolders)
 	TRACE Iteration: $(vFileUpperDir) out of $(vProjectFolders);
 		
 	/* iteration number */
-	LET vFileDirNo										= SubField( vFileUpperDir, '|', 1 );	
+	LET vFileDirNo										= SubField( vFileUpperDir, '|', 1 );
 	/* resetting iteration variable */
-	LET vFileUpperDir									= SubField( vFileUpperDir, '|', 2 );	
+	LET vFileUpperDir									= SubField( vFileUpperDir, '|', 2 );
 	/* setting flag to scan subfolders */
 	LET vFileUpperDir_ScanSubFolders					= $(vInput_ProjectFolder$(vFileDirNo)_ScanSubFolders);
 	/* variables to keep current Folder depending on flag */
 	LET vFileUpperDir_ScanSubFoldersIsOff_string 		= If( not vFileUpperDir_ScanSubFolders, vFileUpperDir, 'null' );
 	LET vFileUpperDir_ScanSubFoldersIsOn_string		 	= If( vFileUpperDir_ScanSubFolders, vFileUpperDir, 'null' );
 	
+	/* string with an instruction of how to determine folder list. Is formed differently depending on whether the Scan Subfolders flag is set or not */
+	LET vFileDirList_string = If( Match( vFileUpperDir_ScanSubFolders, 1 ), ( 'DirList(' & Chr(39) & '$(vFileUpperDir_ScanSubFoldersIsOn_string)\*' & Chr(39) & ')' ), Chr(39) & '$(vFileUpperDir_ScanSubFoldersIsOff_string)' & Chr(39) ) ;
+	
 	/* For each File Folder from the comma-separated list containing either current Project Folder or it's subfolders... */
-	FOR Each vFileDir in '$(vFileUpperDir_ScanSubFoldersIsOff_string)',DirList('$(vFileUpperDir_ScanSubFoldersIsOn_string)' & '\*')
-		TRACE Iteration: $(vFileDir) out of $(vFileUpperDir_ScanSubFoldersIsOff_string), DirList($(vFileUpperDir_ScanSubFoldersIsOn_string));
+	FOR Each vFileDir in $(vFileDirList_string)
+		TRACE Iteration: $(vFileDir) out of $(vFileDirList_string);
 		
 		/* For each QVW file... */
 		FOR Each vFileName in FileList('$(vFileDir)\*.qvw')
@@ -345,7 +347,7 @@ LET vFileDirNo										= Null();
 LET vFileUpperDir_ScanSubFolders					= Null();
 LET vFileUpperDir_ScanSubFoldersIsOff_string		= Null();
 LET vFileUpperDir_ScanSubFoldersIsOn_string			= Null();
-
+LET vFileDirList_string								= Null();
 ///$tab Load - Tables | Fields
 //=====================================[  Load metadata for each table within a list of scanned QVWs and Sources  ]======================================
 TRACE Script block: Load Tables | Fields;
